@@ -18,6 +18,7 @@
 - [Why AgentSpine?](#why-agentspine)
 - [Installation](#installation)
 - [Getting Started](#getting-started)
+- [Examples](#examples)
 - [Roadmap](#roadmap)
 - [License](#license)
 - [Vision](#vision)
@@ -318,6 +319,24 @@ AgentSpine/
 * Turns are serialized per `session_id`; different sessions can run concurrently (bounded by `AGENT_MAX_CONCURRENT`).
 * `sessions_spawn` creates a child session; `subagents` supports `action=list`, `get_result`, `events`, `steer` (with `background=true`), and `kill`.
 * Background runs respect `AGENT_SUBAGENT_MAX_DEPTH`, `AGENT_SUBAGENT_RUN_TIMEOUT_SECONDS`, and optional `AGENT_SUBAGENT_ANNOUNCE_COMPLETION`.
+
+---
+
+## Examples
+
+Quick runnable demos live in [`examples/`](examples/README.md):
+
+```bash
+# No API key required (deterministic, fake provider)
+python examples/demo_mock.py
+
+# Real provider demo (requires keys in .env)
+python examples/demo_real.py --provider openai --model gpt-4o
+python examples/demo_real.py --provider anthropic --model claude-3-5-sonnet-20241022
+```
+
+The mock demo is recommended first when you want to understand concrete runtime behavior
+without model variability.
 
 ---
 
