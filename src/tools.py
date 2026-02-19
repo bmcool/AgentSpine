@@ -154,10 +154,53 @@ def _list_directory(path: str = ".") -> str:
         return f"Error listing {resolved}: {exc}"
 
 
-def _run_cmd(command: str, cwd: str | None = None) -> str:
+_DANGEROUS_RUN_CMD_ENV_VARS = {
+    "LD_PRELOAD",
+    "LD_LIBRARY_PATH",
+    "LD_AUDIT",
+    "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH",
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "RUBYLIB",
+    "PERL5LIB",
+    "BASH_ENV",
+    "ENV",
+    "GCONV_PATH",
+    "IFS",
+    "SSLKEYLOGFILE",
+}
+_DANGEROUS_RUN_CMD_ENV_PREFIXES = ("LD_", "DYLD_")
+
+
+def _validate_run_cmd_env(env: dict[str, str]) -> None:
+    if not isinstance(env, dict):
+        raise ValueError("env must be an object mapping string keys to string values")
+    for key, value in env.items():
+        if not isinstance(key, str):
+            raise ValueError("env keys must be strings")
+        if not isinstance(value, str):
+            raise ValueError(f"env value for '{key}' must be a string")
+        upper_key = key.upper()
+        if upper_key == "PATH":
+            raise ValueError("Security violation: custom 'PATH' is not allowed for run_cmd")
+        if upper_key.startswith(_DANGEROUS_RUN_CMD_ENV_PREFIXES):
+            raise ValueError(f"Security violation: environment variable '{key}' is forbidden")
+        if upper_key in _DANGEROUS_RUN_CMD_ENV_VARS:
+            raise ValueError(f"Security violation: environment variable '{key}' is forbidden")
+
+
+def _run_cmd(command: str, cwd: str | None = None, env: dict[str, str] | None = None) -> str:
     """Run a shell command and return combined stdout+stderr."""
     work_dir = cwd or os.getcwd()
     try:
+        merged_env = None
+        if env is not None:
+            _validate_run_cmd_env(env)
+            merged_env = os.environ.copy()
+            merged_env.update(env)
         result = subprocess.run(
             command,
             shell=True,
@@ -165,6 +208,7 @@ def _run_cmd(command: str, cwd: str | None = None) -> str:
             text=True,
             timeout=30,
             cwd=work_dir,
+            env=merged_env,
         )
         parts: list[str] = []
         if result.stdout:
@@ -287,6 +331,11 @@ _register(
             "cwd": {
                 "type": "string",
                 "description": "Working directory for the command. Defaults to the current directory.",
+            },
+            "env": {
+                "type": "object",
+                "description": "Optional environment variables to merge into process env.",
+                "additionalProperties": {"type": "string"},
             },
         },
         "required": ["command"],

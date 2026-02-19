@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +42,47 @@ class ExecuteToolTests(unittest.TestCase):
             json.dumps({"command": "echo ok", "cwd": str(self.workspace)}),
         )
         self.assertIn("ok", result)
+
+    def test_run_cmd_env_safe_allows_basic_env(self) -> None:
+        result = execute_tool(
+            "run_cmd",
+            json.dumps(
+                {
+                    "command": f'"{sys.executable}" -c "import os; print(os.getenv(\'FOO\', \'\'))"',
+                    "cwd": str(self.workspace),
+                    "env": {"FOO": "bar"},
+                }
+            ),
+        )
+        self.assertIn("bar", result)
+
+    def test_run_cmd_env_blocks_path_override(self) -> None:
+        result = execute_tool(
+            "run_cmd",
+            json.dumps(
+                {
+                    "command": "echo blocked",
+                    "cwd": str(self.workspace),
+                    "env": {"PATH": "x"},
+                }
+            ),
+        )
+        self.assertTrue(result.startswith("Error running command:"))
+        self.assertIn("PATH", result)
+
+    def test_run_cmd_env_blocks_ld_preload(self) -> None:
+        result = execute_tool(
+            "run_cmd",
+            json.dumps(
+                {
+                    "command": "echo blocked",
+                    "cwd": str(self.workspace),
+                    "env": {"LD_PRELOAD": "x"},
+                }
+            ),
+        )
+        self.assertTrue(result.startswith("Error running command:"))
+        self.assertIn("LD_PRELOAD", result)
 
     def test_unknown_tool_returns_error(self) -> None:
         result = execute_tool("nonexistent_tool", "{}")

@@ -46,6 +46,8 @@ pre-commit run --all-files
 - `tests/` — Unit tests; use fake provider, no real API calls.
 - `docs/` — Extra documentation (this file, etc.).
 - `docs/EVENTS.md` — Event contract for `on_event` consumers.
+- `docs/OBSERVABILITY.md` — How to build trace-like telemetry from event streams.
+- `docs/TOOL_UI.md` — Tool output `details` contract and UI rendering guidance.
 
 ## Releasing
 

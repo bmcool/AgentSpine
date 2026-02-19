@@ -2,8 +2,6 @@
 
 Events are emitted by the core during `chat()` / `chat_stream()` when `on_event` is set. Payloads are plain dicts; all events include `"type"`. Ordering is guaranteed as below.
 
-**Reference:** Borrowed from pi-agent-core's event flow; this document is the single source of truth for channel implementations.
-
 ## Event order (one run)
 
 1. `agent_start`
@@ -36,3 +34,10 @@ Events are emitted by the core during `chat()` / `chat_stream()` when `on_event`
 - The core calls `on_event(event)` only when `on_event` is not `None`.
 - Exceptions in `on_event` are caught and ignored; they must not affect the run.
 - Payloads may contain additional keys in the future; consumers should ignore unknown keys.
+
+## `details` semantics for tool events
+
+- `tool_execution_end.details` is populated when a tool returns a structured result
+  (for example `{"text": "...", "details": {...}}`).
+- The payload shape is intentionally tool-specific and forward-compatible.
+- For recommended display conventions, see [TOOL_UI.md](./TOOL_UI.md).

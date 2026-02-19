@@ -154,9 +154,10 @@ class Agent:
         return self._run_loop(on_text_delta=on_text_delta)
 
     def _continue_impl(self, on_text_delta: Callable[[str], None] | None = None) -> str:
-        if not self.session.messages:
+        history_messages = self.session.get_history_messages()
+        if not history_messages:
             raise ValueError("Cannot continue: no messages in context")
-        last_role = str(self.session.messages[-1].get("role", ""))
+        last_role = str(history_messages[-1].get("role", ""))
         if last_role not in {"user", "tool"}:
             raise ValueError("Cannot continue: last message must be user or tool")
         return self._run_loop(on_text_delta=on_text_delta)
@@ -222,9 +223,10 @@ class Agent:
                     extra_tools=self.extra_tools,
                 ),
             )
-            history_messages = self.session.messages
+            base_history_messages = self.session.get_history_messages()
+            history_messages = base_history_messages
             if self.transform_context is not None:
-                transformed_history = self.transform_context(list(self.session.messages))
+                transformed_history = self.transform_context(list(base_history_messages))
                 if isinstance(transformed_history, list):
                     history_messages = transformed_history
             if self.before_turn is not None:
@@ -241,9 +243,25 @@ class Agent:
                 system_prompt=system_prompt,
                 history_messages=history_messages,
             )
-            if compacted and history_messages is self.session.messages:
-                # Keep session history aligned with compacted context (exclude system).
-                self.session.messages = llm_messages[1:]
+            if compacted and history_messages is base_history_messages:
+                compacted_history = llm_messages[1:]
+                summary_text = ""
+                if compacted_history:
+                    first = compacted_history[0]
+                    if isinstance(first, dict):
+                        content = first.get("content")
+                        if isinstance(content, str) and content.strip():
+                            summary_text = content
+                keep_tail = max(0, int(self.context_manager.compact_keep_tail))
+                compacted_head = base_history_messages[:-keep_tail] if keep_tail > 0 else base_history_messages[:]
+                details = self._build_compaction_details(compacted_head)
+                self.session.add_compaction_entry(
+                    summary=summary_text or "[Compacted conversation summary]",
+                    details=details,
+                )
+                # Keep session history aligned with compacted context (exclude system),
+                # while preserving non-history entries such as custom/compaction metadata.
+                self.session.replace_history_messages(compacted_history, preserve_non_history=True)
                 self.store.save(self.session)
             if self.convert_to_llm is not None:
                 converted = self.convert_to_llm(llm_messages)
@@ -462,6 +480,60 @@ class Agent:
                 text[-tail:],
             ]
         )
+
+    def _build_compaction_details(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        read_files: set[str] = set()
+        written_files: set[str] = set()
+        listed_dirs: set[str] = set()
+        commands: set[str] = set()
+
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role")) != "assistant":
+                continue
+            tool_calls = msg.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function")
+                if not isinstance(function, dict):
+                    continue
+                name = function.get("name")
+                arguments = function.get("arguments")
+                if not isinstance(name, str) or not isinstance(arguments, str):
+                    continue
+                try:
+                    args = json.loads(arguments) if arguments else {}
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(args, dict):
+                    continue
+                if name == "read_file":
+                    path = args.get("path")
+                    if isinstance(path, str) and path.strip():
+                        read_files.add(path.strip())
+                elif name == "write_file":
+                    path = args.get("path")
+                    if isinstance(path, str) and path.strip():
+                        written_files.add(path.strip())
+                elif name == "list_directory":
+                    path = args.get("path")
+                    if isinstance(path, str) and path.strip():
+                        listed_dirs.add(path.strip())
+                elif name == "run_cmd":
+                    command = args.get("command")
+                    if isinstance(command, str) and command.strip():
+                        commands.add(command.strip())
+
+        return {
+            "read_files": sorted(read_files),
+            "written_files": sorted(written_files),
+            "listed_dirs": sorted(listed_dirs),
+            "commands": sorted(commands),
+        }
 
     def _normalize_tool_output(self, output: Any) -> tuple[str, Any | None]:
         if isinstance(output, dict):

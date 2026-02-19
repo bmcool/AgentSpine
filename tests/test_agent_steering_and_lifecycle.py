@@ -221,6 +221,22 @@ class AgentPiAlignmentTests(unittest.TestCase):
         self.assertTrue(any(msg.get("content") == "context-marker" for msg in sent_messages))
         self.assertTrue(any(msg.get("content") == "convert-marker" for msg in sent_messages))
 
+    def test_custom_entry_excluded_but_custom_message_included_in_llm_context(self) -> None:
+        provider = FakeProvider([_assistant_text("ok")])
+        agent = self._new_agent(provider)
+        agent.session.add_custom_entry("memory", {"secret": "value"})
+        agent.session.add_custom_message("inject", "custom-message-visible")
+        agent.store.save(agent.session)
+
+        result = agent.chat("hello")
+
+        self.assertEqual(result, "ok")
+        sent_messages = provider.calls[0]["messages"]
+        contents = [m.get("content") for m in sent_messages if isinstance(m, dict)]
+        self.assertIn("custom-message-visible", contents)
+        flattened = json.dumps(sent_messages, ensure_ascii=False)
+        self.assertNotIn('"secret": "value"', flattened)
+
     def test_on_event_emits_lifecycle_and_stream_updates(self) -> None:
         provider = FakeProvider([_assistant_text("streamed-text")])
         events: list[dict[str, Any]] = []

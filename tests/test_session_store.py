@@ -202,6 +202,37 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(loaded.meta.usage_cache_read_tokens, 0)
         self.assertEqual(loaded.meta.usage_cache_write_tokens, 0)
 
+    def test_save_and_load_extended_entries_roundtrip(self) -> None:
+        session = self.store.load_or_create(
+            session_id="entries",
+            provider="openai",
+            model="gpt-4o",
+            workspace_dir="/workspace",
+        )
+        session.add_custom_entry("memory", {"foo": "bar"})
+        session.add_custom_message("inject", "custom visible text", details={"scope": "test"})
+        session.add_compaction_entry("summary text", details={"read_files": ["a.py"]})
+        session.add_user_message("hello")
+        self.store.save(session)
+
+        loaded = self.store.load_or_create(
+            session_id="entries",
+            provider="openai",
+            model="gpt-4o",
+            workspace_dir="/workspace",
+        )
+
+        kinds = [entry.get("type") for entry in loaded.entries]
+        self.assertIn("custom", kinds)
+        self.assertIn("custom_message", kinds)
+        self.assertIn("compaction", kinds)
+        self.assertIn("message", kinds)
+
+        history_contents = [m.get("content") for m in loaded.get_history_messages()]
+        self.assertIn("custom visible text", history_contents)
+        self.assertIn("hello", history_contents)
+        self.assertNotIn("summary text", history_contents)
+
 
 if __name__ == "__main__":
     unittest.main()

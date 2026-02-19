@@ -2,6 +2,12 @@
 
 These rules apply to both human contributors and AI coding agents.
 
+## First message workflow
+
+- If the first user message is not a concrete coding task, read `README.md` first.
+- Then ask which module to work on (`agent.py`, `tools.py`, `providers/`, `session*`, `context_*`, etc.).
+- Before changing code, read the target files fully and confirm scope.
+
 ## Tooling and file operations
 
 - Do not use `sed`/`cat` style commands for source inspection in automated agent flows.
@@ -29,3 +35,23 @@ These rules apply to both human contributors and AI coding agents.
 - Follow existing patterns in `src/agent.py` and `src/tools.py`.
 - Keep public interfaces type-annotated.
 - Avoid broad refactors unrelated to the requested task.
+
+## Adding a new LLM provider
+
+Use this checklist to keep provider additions consistent:
+
+1. Implement the provider class against `Provider` in `src/providers/base.py` (`name`, `complete`).
+2. Register provider selection in `src/agent.py` (provider routing and default model behavior).
+3. Add/update required environment variables in `.env.example`.
+4. Update `README.md` configuration and quick-start examples.
+5. Add or update provider tests in `tests/` (prefer deterministic/mock coverage).
+
+## Parallel-agent git safety
+
+- Stage only files you changed in this task.
+- Use explicit staging (`git add <file1> <file2> ...`), not sweeping staging.
+- Do not run commands that can drop unrelated uncommitted work:
+  - `git reset --hard`
+  - `git checkout .`
+  - `git clean -fd`
+  - `git stash`

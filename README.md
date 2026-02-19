@@ -344,12 +344,22 @@ without model variability.
 
 ## Roadmap
 
-* Structured memory modules
-* Built-in RAG connectors
-* Workflow phase engine
-* Observability hooks
-* Tool sandboxing
-* Multi-agent orchestration layer
+* **Structured memory modules**  
+  Add optional short-term + long-term memory adapters that stay outside core control flow, exposed via tools (for example `memory_store` / `memory_retrieve`) so agents decide when to read/write memory.
+* **Built-in RAG connectors**  
+  Provide retrieval/indexing connectors as pluggable tools that integrate with session context and existing compaction behavior.
+* **Workflow phase engine**  
+  Introduce optional phase-aware hooks so outer layers can filter tools and vary prompts by phase, without hard-coding a state machine in the core loop.
+* **Observability hooks**  
+  Build on `on_event` with documented trace mapping and optional tracer helpers for exporting structured spans/events.
+* **Tool sandboxing**  
+  Add guardrails for high-risk tools (filesystem, shell, network) while preserving composability for trusted environments.
+* **Multi-agent orchestration layer**  
+  Extend current parent/child subagent primitives with optional routing and strategy modules for coordinated, peer-style multi-agent execution.
+* **MCP client adapter**  
+  Add an optional adapter that maps MCP tools into AgentSpine `extra_tools` definitions and handlers.
+* **Structured artifacts**  
+  Define common result metadata (for example `kind`, `path`, `mime_type`) for richer UI rendering and downstream automation.
 
 ---
 

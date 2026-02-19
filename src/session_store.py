@@ -43,7 +43,7 @@ class SessionStore:
             return session
 
         meta: SessionMeta | None = None
-        messages: list[dict] = []
+        entries: list[dict] = []
         for raw_line in path.read_text(encoding="utf-8").splitlines():
             if not raw_line.strip():
                 continue
@@ -73,7 +73,16 @@ class SessionStore:
             elif kind == "message":
                 message = row.get("message")
                 if isinstance(message, dict):
-                    messages.append(message)
+                    entries.append(
+                        {
+                            "type": "message",
+                            "message": message,
+                            "timestamp": str(row.get("timestamp", utc_now_iso())),
+                        }
+                    )
+            elif kind in {"custom", "custom_message", "compaction"}:
+                if isinstance(row, dict):
+                    entries.append(row)
 
         if meta is None:
             now = utc_now_iso()
@@ -96,7 +105,7 @@ class SessionStore:
             meta.subagent_depth = max(0, int(meta.subagent_depth))
             meta.updated_at = utc_now_iso()
 
-        session = Session(meta=meta, messages=messages)
+        session = Session(meta=meta, entries=entries)
         self.save(session)
         return session
 
@@ -123,8 +132,13 @@ class SessionStore:
                 ensure_ascii=False,
             )
         ]
-        for msg in session.messages:
-            lines.append(json.dumps({"type": "message", "message": msg}, ensure_ascii=False))
+        for entry in session.entries:
+            if not isinstance(entry, dict):
+                continue
+            kind = entry.get("type")
+            if kind not in {"message", "custom", "custom_message", "compaction"}:
+                continue
+            lines.append(json.dumps(entry, ensure_ascii=False))
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
     def _session_path(self, session_id: str) -> Path:
