@@ -3,13 +3,14 @@ Tool definitions and execution for the reactive agent.
 
 Each tool has:
   - An OpenAI-compatible function schema (for the LLM).
-  - A Python implementation that receives parsed arguments and returns a string result.
+  - A Python implementation that receives parsed arguments and returns text
+    (or a structured payload with "text" + optional "details").
 """
 
 from __future__ import annotations
 
-import json
 import inspect
+import json
 import os
 import re
 import subprocess
@@ -25,6 +26,11 @@ from urllib.request import Request, urlopen
 
 # Maps tool name -> implementation function
 _TOOL_IMPLS: dict[str, Callable[..., str]] = {}
+
+# Tool execution return contract:
+# - str: plain text result (legacy)
+# - {"text": str, "details"?: Any}: structured result for richer event/UI rendering
+ToolExecutionResult = str | dict[str, Any]
 
 # Base tool definitions sent to the model
 BASE_TOOL_DEFINITIONS: list[dict[str, Any]] = []
@@ -318,13 +324,13 @@ _register(
 def execute_tool(
     name: str,
     arguments_json: str,
-    runtime_hooks: dict[str, Callable[..., str]] | None = None,
-    extra_handlers: dict[str, Callable[..., str]] | None = None,
+    runtime_hooks: dict[str, Callable[..., Any]] | None = None,
+    extra_handlers: dict[str, Callable[..., Any]] | None = None,
     on_progress: Callable[[str], None] | None = None,
-) -> str:
+) -> ToolExecutionResult:
     """
     Look up a tool by name, parse its JSON arguments, and run it.
-    Returns the result string (or an error message).
+    Returns a string result (legacy) or a structured dict payload.
     extra_handlers: optional map of name -> handler for embedding-project tools.
     """
     fn = _TOOL_IMPLS.get(name)

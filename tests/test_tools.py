@@ -79,6 +79,19 @@ class ExecuteToolTests(unittest.TestCase):
                 extra_handlers={"failing_custom": failing_handler},
             )
 
+    def test_extra_handler_can_return_structured_result(self) -> None:
+        def structured_handler() -> dict[str, object]:
+            return {"text": "ok", "details": {"value": 1}}
+
+        result = execute_tool(
+            "structured_custom",
+            "{}",
+            extra_handlers={"structured_custom": structured_handler},
+        )
+        self.assertIsInstance(result, dict)
+        self.assertEqual(result.get("text"), "ok")
+        self.assertEqual(result.get("details"), {"value": 1})
+
 
 class GetToolDefinitionsTests(unittest.TestCase):
     def test_base_tools_without_orchestration(self) -> None:

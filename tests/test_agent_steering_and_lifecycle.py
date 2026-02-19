@@ -26,6 +26,7 @@ class FakeProvider:
         session_id: str | None = None,
         thinking_level: str = "off",
         on_text_delta: Any = None,
+        api_key: str | None = None,
     ) -> ProviderResponse:
         self.calls.append(
             {
@@ -34,6 +35,7 @@ class FakeProvider:
                 "tools": tools,
                 "session_id": session_id,
                 "thinking_level": thinking_level,
+                "api_key": api_key,
             }
         )
         if not self._responses:
@@ -64,11 +66,12 @@ def _assistant_with_tools(*calls: tuple[str, str, str]) -> ProviderResponse:
     )
 
 
-def _assistant_text(text: str) -> ProviderResponse:
+def _assistant_text(text: str, usage: dict[str, int] | None = None) -> ProviderResponse:
     return ProviderResponse(
         assistant_message={"role": "assistant", "content": text},
         tool_calls=[],
         text=text,
+        usage=usage,
     )
 
 
@@ -236,6 +239,10 @@ class AgentPiAlignmentTests(unittest.TestCase):
         self.assertIn("message_end", event_types)
         self.assertIn("turn_end", event_types)
         self.assertIn("agent_end", event_types)
+        turn_end = next(e for e in events if e.get("type") == "turn_end")
+        self.assertIn("tool_calls_count", turn_end)
+        self.assertIn("assistant_message_preview", turn_end)
+        self.assertIn("tool_results_preview", turn_end)
 
     def test_tool_progress_emits_tool_execution_update(self) -> None:
         provider = FakeProvider(
@@ -368,6 +375,109 @@ class AgentPiAlignmentTests(unittest.TestCase):
         tool_results = [m for m in agent.session.messages if m.get("role") == "tool"]
         self.assertEqual(len(tool_results), 1)
         self.assertIn("hello from file", tool_results[0]["content"])
+
+    def test_get_api_key_is_forwarded_to_provider(self) -> None:
+        provider = FakeProvider([_assistant_text("ok")])
+        agent = self._new_agent(provider, extra_tools=None)
+        agent.get_api_key = lambda provider_name: f"key-for-{provider_name}"
+
+        result = agent.chat("hello")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(provider.calls[0]["api_key"], "key-for-openai")
+
+    def test_before_turn_can_override_system_prompt(self) -> None:
+        provider = FakeProvider([_assistant_text("ok")])
+
+        def before_turn(_session_id: str, _round_no: int, _messages: list[dict[str, Any]], system_prompt: str):
+            return (system_prompt + "\nTEST-HOOK-MARKER", None)
+
+        agent = self._new_agent(provider, extra_tools=None)
+        agent.before_turn = before_turn
+
+        result = agent.chat("hello")
+
+        self.assertEqual(result, "ok")
+        first_messages = provider.calls[0]["messages"]
+        system_message = first_messages[0]
+        self.assertEqual(system_message.get("role"), "system")
+        self.assertIn("TEST-HOOK-MARKER", system_message.get("content", ""))
+
+    def test_usage_is_accumulated_into_session_meta(self) -> None:
+        provider = FakeProvider(
+            [
+                _assistant_text(
+                    "ok",
+                    usage={
+                        "input_tokens": 10,
+                        "output_tokens": 4,
+                        "total_tokens": 14,
+                        "cache_read_tokens": 2,
+                        "cache_write_tokens": 1,
+                    },
+                )
+            ]
+        )
+        agent = self._new_agent(provider)
+
+        result = agent.chat("hello")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(agent.session.meta.usage_input_tokens, 10)
+        self.assertEqual(agent.session.meta.usage_output_tokens, 4)
+        self.assertEqual(agent.session.meta.usage_total_tokens, 14)
+        self.assertEqual(agent.session.meta.usage_cache_read_tokens, 2)
+        self.assertEqual(agent.session.meta.usage_cache_write_tokens, 1)
+
+    def test_steer_emits_skipped_tool_events(self) -> None:
+        provider = FakeProvider(
+            [
+                _assistant_with_tools(
+                    ("tc1", "run_cmd", '{"command":"echo 1"}'),
+                    ("tc2", "run_cmd", '{"command":"echo 2"}'),
+                ),
+                _assistant_text("done"),
+            ]
+        )
+        events: list[dict[str, Any]] = []
+        agent = self._new_agent(provider, on_event=events.append)
+        invocations = {"count": 0}
+
+        def fake_execute_tool(*_: Any, **__: Any) -> str:
+            invocations["count"] += 1
+            if invocations["count"] == 1:
+                agent.steer("interrupt")
+            return "ok"
+
+        with patch("src.agent.execute_tool", side_effect=fake_execute_tool):
+            result = agent.chat("start")
+
+        self.assertEqual(result, "done")
+        skipped_end = [
+            e for e in events if e.get("type") == "tool_execution_end" and e.get("tool_call_id") == "tc2"
+        ]
+        self.assertEqual(len(skipped_end), 1)
+        self.assertTrue(bool(skipped_end[0].get("skipped")))
+
+    def test_structured_tool_result_details_emitted(self) -> None:
+        provider = FakeProvider([_assistant_with_tools(("tc1", "custom", "{}")), _assistant_text("done")])
+        events: list[dict[str, Any]] = []
+        agent = self._new_agent(provider, on_event=events.append)
+
+        def fake_execute_tool(*_: Any, **__: Any) -> dict[str, Any]:
+            return {"text": "plain-text", "details": {"artifact": "x"}}
+
+        with patch("src.agent.execute_tool", side_effect=fake_execute_tool):
+            result = agent.chat("start")
+
+        self.assertEqual(result, "done")
+        tool_result = next(
+            m for m in agent.session.messages if m.get("role") == "tool" and m.get("tool_call_id") == "tc1"
+        )
+        self.assertEqual(tool_result.get("content"), "plain-text")
+        end_events = [e for e in events if e.get("type") == "tool_execution_end" and e.get("tool_call_id") == "tc1"]
+        self.assertEqual(len(end_events), 1)
+        self.assertEqual(end_events[0].get("details"), {"artifact": "x"})
 
 
 if __name__ == "__main__":

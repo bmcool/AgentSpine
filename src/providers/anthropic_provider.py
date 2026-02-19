@@ -126,6 +126,8 @@ def _to_anthropic_messages(messages: list[dict[str, Any]]) -> tuple[str, list[di
 
 class AnthropicProvider(Provider):
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
         self._client = Anthropic(api_key=api_key, base_url=base_url)
 
     @property
@@ -141,6 +143,7 @@ class AnthropicProvider(Provider):
         session_id: str | None = None,
         thinking_level: str = "off",
         on_text_delta: Callable[[str], None] | None = None,
+        api_key: str | None = None,
     ) -> ProviderResponse:
         _ = session_id  # Reserved for future provider-side session-aware caching.
         system, anthropic_messages = _to_anthropic_messages(messages)
@@ -157,9 +160,9 @@ class AnthropicProvider(Provider):
             create_kwargs["thinking"] = thinking
 
         if on_text_delta is None:
-            resp = self._safe_messages_create(create_kwargs)
+            resp = self._safe_messages_create(create_kwargs, api_key=api_key)
         else:
-            with self._safe_messages_stream(create_kwargs) as stream:
+            with self._safe_messages_stream(create_kwargs, api_key=api_key) as stream:
                 for text in stream.text_stream:
                     if text:
                         on_text_delta(text)
@@ -194,27 +197,47 @@ class AnthropicProvider(Provider):
             assistant_message=assistant_message,
             tool_calls=tool_calls,
             text=text,
+            usage=_extract_anthropic_usage(getattr(resp, "usage", None)),
         )
 
-    def _safe_messages_create(self, kwargs: dict[str, Any]):
+    def _safe_messages_create(self, kwargs: dict[str, Any], *, api_key: str | None = None):
+        client = self._client if api_key is None else Anthropic(api_key=api_key, base_url=self._base_url)
         try:
-            return self._client.messages.create(**kwargs)
+            return client.messages.create(**kwargs)
         except Exception as exc:
             if kwargs.get("thinking") is not None and _is_unsupported_thinking_error(exc):
                 fallback = dict(kwargs)
                 fallback.pop("thinking", None)
-                return self._client.messages.create(**fallback)
+                return client.messages.create(**fallback)
             raise
 
-    def _safe_messages_stream(self, kwargs: dict[str, Any]):
+    def _safe_messages_stream(self, kwargs: dict[str, Any], *, api_key: str | None = None):
+        client = self._client if api_key is None else Anthropic(api_key=api_key, base_url=self._base_url)
         try:
-            return self._client.messages.stream(**kwargs)
+            return client.messages.stream(**kwargs)
         except Exception as exc:
             if kwargs.get("thinking") is not None and _is_unsupported_thinking_error(exc):
                 fallback = dict(kwargs)
                 fallback.pop("thinking", None)
-                return self._client.messages.stream(**fallback)
+                return client.messages.stream(**fallback)
             raise
+
+
+def _extract_anthropic_usage(usage: Any) -> dict[str, int] | None:
+    if usage is None:
+        return None
+    input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+    cache_read_tokens = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_write_tokens = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    total_tokens = input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+        "cache_read_tokens": cache_read_tokens,
+        "cache_write_tokens": cache_write_tokens,
+    }
 
 
 def _to_anthropic_thinking(thinking_level: str) -> dict[str, Any] | None:

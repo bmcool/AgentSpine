@@ -9,6 +9,8 @@ from .base import Provider, ProviderResponse, ToolCall
 
 class OpenAIProvider(Provider):
     def __init__(self, *, api_key: str | None = None, base_url: str | None = None) -> None:
+        self._api_key = api_key
+        self._base_url = base_url
         self._client = OpenAI(api_key=api_key, base_url=base_url)
 
     @property
@@ -24,6 +26,7 @@ class OpenAIProvider(Provider):
         session_id: str | None = None,
         thinking_level: str = "off",
         on_text_delta: Any = None,
+        api_key: str | None = None,
     ) -> ProviderResponse:
         if on_text_delta is not None:
             return self._complete_streaming(
@@ -33,6 +36,7 @@ class OpenAIProvider(Provider):
                 session_id=session_id,
                 thinking_level=thinking_level,
                 on_text_delta=on_text_delta,
+                api_key=api_key,
             )
 
         request_kwargs = self._request_kwargs(
@@ -42,7 +46,7 @@ class OpenAIProvider(Provider):
             session_id=session_id,
             thinking_level=thinking_level,
         )
-        response = self._safe_chat_create(**request_kwargs)
+        response = self._safe_chat_create(api_key=api_key, **request_kwargs)
         msg = response.choices[0].message
         tool_calls = [
             ToolCall(
@@ -68,6 +72,7 @@ class OpenAIProvider(Provider):
             assistant_message=assistant_message,
             tool_calls=tool_calls,
             text=msg.content or "",
+            usage=_extract_openai_usage(getattr(response, "usage", None)),
         )
 
     def _complete_streaming(
@@ -79,6 +84,7 @@ class OpenAIProvider(Provider):
         session_id: str | None,
         thinking_level: str,
         on_text_delta: Any,
+        api_key: str | None = None,
     ) -> ProviderResponse:
         request_kwargs = self._request_kwargs(
             model=model,
@@ -88,7 +94,7 @@ class OpenAIProvider(Provider):
             thinking_level=thinking_level,
             stream=True,
         )
-        stream = self._safe_chat_create(**request_kwargs)
+        stream = self._safe_chat_create(api_key=api_key, **request_kwargs)
 
         text_parts: list[str] = []
         tool_parts: dict[int, dict[str, str]] = {}
@@ -149,7 +155,7 @@ class OpenAIProvider(Provider):
                 }
                 for tc in tool_calls
             ]
-        return ProviderResponse(assistant_message=assistant_message, tool_calls=tool_calls, text=text)
+        return ProviderResponse(assistant_message=assistant_message, tool_calls=tool_calls, text=text, usage=None)
 
     def _request_kwargs(
         self,
@@ -178,16 +184,30 @@ class OpenAIProvider(Provider):
             kwargs["user"] = session_id
         return kwargs
 
-    def _safe_chat_create(self, **kwargs: Any):
+    def _safe_chat_create(self, *, api_key: str | None = None, **kwargs: Any):
+        client = self._client if api_key is None else OpenAI(api_key=api_key, base_url=self._base_url)
         try:
-            return self._client.chat.completions.create(**kwargs)
+            return client.chat.completions.create(**kwargs)
         except Exception as exc:
             # Some model/backends reject reasoning params even when the SDK accepts them.
             if "reasoning_effort" in kwargs and _is_unsupported_reasoning_error(exc):
                 fallback_kwargs = dict(kwargs)
                 fallback_kwargs.pop("reasoning_effort", None)
-                return self._client.chat.completions.create(**fallback_kwargs)
+                return client.chat.completions.create(**fallback_kwargs)
             raise
+
+
+def _extract_openai_usage(usage: Any) -> dict[str, int] | None:
+    if usage is None:
+        return None
+    input_tokens = int(getattr(usage, "prompt_tokens", 0) or 0)
+    output_tokens = int(getattr(usage, "completion_tokens", 0) or 0)
+    total_tokens = int(getattr(usage, "total_tokens", input_tokens + output_tokens) or (input_tokens + output_tokens))
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
 
 
 def _to_openai_reasoning_effort(thinking_level: str) -> str | None:

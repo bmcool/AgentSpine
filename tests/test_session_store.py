@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -62,6 +63,31 @@ class SessionTests(unittest.TestCase):
         session.reset()
         self.assertEqual(len(session), 0)
 
+    def test_accumulate_usage_updates_meta(self) -> None:
+        meta = SessionMeta(
+            session_id="s1",
+            provider="openai",
+            model="gpt-4o",
+            workspace_dir="/tmp",
+            parent_session_id=None,
+            subagent_depth=0,
+            created_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+        )
+        session = Session(meta=meta)
+        session.accumulate_usage(
+            input_tokens=12,
+            output_tokens=5,
+            total_tokens=17,
+            cache_read_tokens=2,
+            cache_write_tokens=1,
+        )
+        self.assertEqual(session.meta.usage_input_tokens, 12)
+        self.assertEqual(session.meta.usage_output_tokens, 5)
+        self.assertEqual(session.meta.usage_total_tokens, 17)
+        self.assertEqual(session.meta.usage_cache_read_tokens, 2)
+        self.assertEqual(session.meta.usage_cache_write_tokens, 1)
+
 
 class SessionStoreTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -111,6 +137,70 @@ class SessionStoreTests(unittest.TestCase):
         self.assertEqual(len(loaded), 2)
         self.assertEqual(loaded.messages[0]["content"], "hi")
         self.assertEqual(loaded.messages[1]["content"], "hello")
+
+    def test_save_and_load_usage_fields(self) -> None:
+        session = self.store.load_or_create(
+            session_id="usage",
+            provider="openai",
+            model="gpt-4o",
+            workspace_dir="/workspace",
+        )
+        session.accumulate_usage(
+            input_tokens=100,
+            output_tokens=25,
+            total_tokens=125,
+            cache_read_tokens=10,
+            cache_write_tokens=3,
+        )
+        self.store.save(session)
+
+        loaded = self.store.load_or_create(
+            session_id="usage",
+            provider="openai",
+            model="gpt-4o",
+            workspace_dir="/workspace",
+        )
+        self.assertEqual(loaded.meta.usage_input_tokens, 100)
+        self.assertEqual(loaded.meta.usage_output_tokens, 25)
+        self.assertEqual(loaded.meta.usage_total_tokens, 125)
+        self.assertEqual(loaded.meta.usage_cache_read_tokens, 10)
+        self.assertEqual(loaded.meta.usage_cache_write_tokens, 3)
+
+    def test_load_legacy_session_header_defaults_usage_to_zero(self) -> None:
+        path = Path(self.temp.name) / "legacy.jsonl"
+        path.write_text(
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "type": "header",
+                            "session_id": "legacy",
+                            "provider": "openai",
+                            "model": "gpt-4o",
+                            "workspace_dir": "/workspace",
+                            "parent_session_id": None,
+                            "subagent_depth": 0,
+                            "created_at": utc_now_iso(),
+                            "updated_at": utc_now_iso(),
+                        }
+                    ),
+                    json.dumps({"type": "message", "message": {"role": "user", "content": "hello"}}),
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        loaded = self.store.load_or_create(
+            session_id="legacy",
+            provider="openai",
+            model="gpt-4o",
+            workspace_dir="/workspace",
+        )
+        self.assertEqual(loaded.meta.usage_input_tokens, 0)
+        self.assertEqual(loaded.meta.usage_output_tokens, 0)
+        self.assertEqual(loaded.meta.usage_total_tokens, 0)
+        self.assertEqual(loaded.meta.usage_cache_read_tokens, 0)
+        self.assertEqual(loaded.meta.usage_cache_write_tokens, 0)
 
 
 if __name__ == "__main__":

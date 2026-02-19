@@ -31,6 +31,7 @@ class FakeProvider:
         session_id: str | None = None,
         thinking_level: str = "off",
         on_text_delta: Any = None,
+        api_key: str | None = None,
     ) -> ProviderResponse:
         self.calls.append(
             {
@@ -39,6 +40,7 @@ class FakeProvider:
                 "tools": tools,
                 "session_id": session_id,
                 "thinking_level": thinking_level,
+                "api_key": api_key,
             }
         )
         if not self._responses:

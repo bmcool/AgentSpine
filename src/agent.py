@@ -40,6 +40,8 @@ EventHandler = Callable[[dict[str, Any]], None]
 MessageTransformer = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
 ContextTransformer = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
 MessageConverter = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
+BeforeTurnHook = Callable[[str, int, list[dict[str, Any]], str], tuple[str | None, list[dict[str, Any]] | None] | None]
+ApiKeyResolver = Callable[[str], str | None]
 
 SKIPPED_DUE_TO_STEER = "Skipped due to user interrupt."
 TOOL_ERROR_PREFIX = "[Tool Error]"
@@ -68,6 +70,8 @@ class Agent:
         transform_context: ContextTransformer | None = None,
         convert_to_llm: MessageConverter | None = None,
         transform_messages_for_llm: MessageTransformer | None = None,
+        before_turn: BeforeTurnHook | None = None,
+        get_api_key: ApiKeyResolver | None = None,
     ) -> None:
         self.provider_name = (provider or os.getenv("AGENT_PROVIDER") or "openai").strip().lower()
         if self.provider_name not in {"openai", "anthropic"}:
@@ -88,6 +92,8 @@ class Agent:
         self.transform_context = transform_context
         self.convert_to_llm = convert_to_llm
         self.transform_messages_for_llm = transform_messages_for_llm
+        self.before_turn = before_turn
+        self.get_api_key = get_api_key
         self._queue_lock = threading.Lock()
         self._steering_queue: list[str] = []
         self._follow_up_queue: list[str] = []
@@ -192,9 +198,20 @@ class Agent:
         repeat_rounds = 0
         for _round in range(MAX_TOOL_ROUNDS):
             round_no = _round + 1
+            assistant_preview = ""
+            tool_results_preview: list[str] = []
             self._emit_event({"type": "turn_start", "round": round_no})
             if self.cancel_event is not None and self.cancel_event.is_set():
-                self._emit_event({"type": "turn_end", "round": round_no, "status": "cancelled"})
+                self._emit_event(
+                    {
+                        "type": "turn_end",
+                        "round": round_no,
+                        "status": "cancelled",
+                        "tool_calls_count": 0,
+                        "assistant_message_preview": assistant_preview,
+                        "tool_results_preview": tool_results_preview,
+                    }
+                )
                 return self._finish_run("(agent stopped: cancelled)")
             system_prompt = self.prompt_builder.build(
                 provider=self.provider_name,
@@ -210,6 +227,14 @@ class Agent:
                 transformed_history = self.transform_context(list(self.session.messages))
                 if isinstance(transformed_history, list):
                     history_messages = transformed_history
+            if self.before_turn is not None:
+                hook_result = self.before_turn(self.session.meta.session_id, round_no, list(history_messages), system_prompt)
+                if isinstance(hook_result, tuple) and len(hook_result) == 2:
+                    prompt_override, prepend_messages = hook_result
+                    if isinstance(prompt_override, str) and prompt_override.strip():
+                        system_prompt = prompt_override
+                    if isinstance(prepend_messages, list):
+                        history_messages = list(prepend_messages) + list(history_messages)
             llm_messages, compacted = self.context_manager.prepare_messages(
                 system_prompt=system_prompt,
                 history_messages=history_messages,
@@ -256,16 +281,43 @@ class Agent:
                     "text_preview": _truncate(response.text or "", 200),
                 }
             )
+            assistant_preview = _truncate(response.text or "", 200)
             self.session.add_assistant_message(response.assistant_message)
+            if response.usage:
+                self.session.accumulate_usage(
+                    input_tokens=int(response.usage.get("input_tokens", 0) or 0),
+                    output_tokens=int(response.usage.get("output_tokens", 0) or 0),
+                    total_tokens=int(response.usage.get("total_tokens", 0) or 0),
+                    cache_read_tokens=int(response.usage.get("cache_read_tokens", 0) or 0),
+                    cache_write_tokens=int(response.usage.get("cache_write_tokens", 0) or 0),
+                )
             self.store.save(self.session)
 
             if not response.tool_calls:
                 queued_follow_up = self._pop_follow_up_message()
                 if queued_follow_up is not None:
                     self._append_queued_user_message(queued_follow_up, source="follow_up", round_no=round_no)
-                    self._emit_event({"type": "turn_end", "round": round_no, "status": "follow_up_injected"})
+                    self._emit_event(
+                        {
+                            "type": "turn_end",
+                            "round": round_no,
+                            "status": "follow_up_injected",
+                            "tool_calls_count": 0,
+                            "assistant_message_preview": assistant_preview,
+                            "tool_results_preview": tool_results_preview,
+                        }
+                    )
                     continue
-                self._emit_event({"type": "turn_end", "round": round_no, "status": "completed", "tool_calls": 0})
+                self._emit_event(
+                    {
+                        "type": "turn_end",
+                        "round": round_no,
+                        "status": "completed",
+                        "tool_calls_count": 0,
+                        "assistant_message_preview": assistant_preview,
+                        "tool_results_preview": tool_results_preview,
+                    }
+                )
                 return self._finish_run(response.text)
 
             signature = "|".join(f"{call.name}:{call.arguments_json}" for call in response.tool_calls)
@@ -275,13 +327,32 @@ class Agent:
                 repeat_rounds = 1
                 last_tool_signature = signature
             if repeat_rounds >= MAX_TOOL_REPEAT_ROUNDS:
-                self._emit_event({"type": "turn_end", "round": round_no, "status": "loop_detected"})
+                self._emit_event(
+                    {
+                        "type": "turn_end",
+                        "round": round_no,
+                        "status": "loop_detected",
+                        "tool_calls_count": len(response.tool_calls),
+                        "assistant_message_preview": assistant_preview,
+                        "tool_results_preview": tool_results_preview,
+                    }
+                )
                 return self._finish_run("(agent stopped: repeated tool-call loop detected)")
 
             steering_triggered = False
+            tool_calls_count = len(response.tool_calls)
             for idx, call in enumerate(response.tool_calls):
                 if self.cancel_event is not None and self.cancel_event.is_set():
-                    self._emit_event({"type": "turn_end", "round": round_no, "status": "cancelled"})
+                    self._emit_event(
+                        {
+                            "type": "turn_end",
+                            "round": round_no,
+                            "status": "cancelled",
+                            "tool_calls_count": tool_calls_count,
+                            "assistant_message_preview": assistant_preview,
+                            "tool_results_preview": tool_results_preview,
+                        }
+                    )
                     return self._finish_run("(agent stopped: cancelled)")
                 print(f"  [tool] {call.name}({_truncate(call.arguments_json, 96)})")
                 self._emit_event(
@@ -294,7 +365,7 @@ class Agent:
                     }
                 )
                 try:
-                    result = execute_tool(
+                    tool_output = execute_tool(
                         call.name,
                         call.arguments_json,
                         runtime_hooks=self._runtime_tool_hooks(),
@@ -310,24 +381,48 @@ class Agent:
                         ),
                     )
                 except Exception as exc:
-                    result = f"{TOOL_ERROR_PREFIX} {call.name}: {exc}"
-                truncated_result = self._truncate_tool_result(result)
+                    tool_output = f"{TOOL_ERROR_PREFIX} {call.name}: {exc}"
+                result_text, result_details = self._normalize_tool_output(tool_output)
+                truncated_result = self._truncate_tool_result(result_text)
+                tool_results_preview.append(_truncate(truncated_result, 200))
                 self.session.add_tool_result(
                     tool_call_id=call.id,
                     content=truncated_result,
                 )
-                self._emit_event(
-                    {
-                        "type": "tool_execution_end",
-                        "round": round_no,
-                        "tool_call_id": call.id,
-                        "tool_name": call.name,
-                        "result_preview": _truncate(truncated_result, 200),
-                    }
-                )
+                end_event: dict[str, Any] = {
+                    "type": "tool_execution_end",
+                    "round": round_no,
+                    "tool_call_id": call.id,
+                    "tool_name": call.name,
+                    "result_preview": _truncate(truncated_result, 200),
+                }
+                if result_details is not None:
+                    end_event["details"] = result_details
+                self._emit_event(end_event)
                 queued_steer = self._pop_steering_message()
                 if queued_steer is not None:
                     for skipped_call in response.tool_calls[idx + 1 :]:
+                        self._emit_event(
+                            {
+                                "type": "tool_execution_start",
+                                "round": round_no,
+                                "tool_call_id": skipped_call.id,
+                                "tool_name": skipped_call.name,
+                                "args": skipped_call.arguments_json,
+                            }
+                        )
+                        skipped_preview = _truncate(SKIPPED_DUE_TO_STEER, 200)
+                        self._emit_event(
+                            {
+                                "type": "tool_execution_end",
+                                "round": round_no,
+                                "tool_call_id": skipped_call.id,
+                                "tool_name": skipped_call.name,
+                                "result_preview": skipped_preview,
+                                "skipped": True,
+                            }
+                        )
+                        tool_results_preview.append(skipped_preview)
                         self.session.add_tool_result(
                             tool_call_id=skipped_call.id,
                             content=SKIPPED_DUE_TO_STEER,
@@ -337,7 +432,16 @@ class Agent:
                     break
             self.store.save(self.session)
             status = "steered" if steering_triggered else "tool_calls_processed"
-            self._emit_event({"type": "turn_end", "round": round_no, "status": status})
+            self._emit_event(
+                {
+                    "type": "turn_end",
+                    "round": round_no,
+                    "status": status,
+                    "tool_calls_count": tool_calls_count,
+                    "assistant_message_preview": assistant_preview,
+                    "tool_results_preview": tool_results_preview,
+                }
+            )
 
         return self._finish_run("(agent stopped: too many tool rounds)")
 
@@ -356,6 +460,17 @@ class Agent:
                 text[-tail:],
             ]
         )
+
+    def _normalize_tool_output(self, output: Any) -> tuple[str, Any | None]:
+        if isinstance(output, dict):
+            text = output.get("text")
+            details = output.get("details")
+            if isinstance(text, str):
+                return text, details
+            return json.dumps(output, ensure_ascii=False), details
+        if isinstance(output, str):
+            return output, None
+        return str(output), None
 
     def _pop_steering_message(self) -> str | None:
         with self._queue_lock:
@@ -407,7 +522,7 @@ class Agent:
             base_url=os.getenv("OPENAI_BASE_URL"),
         )
 
-    def _runtime_tool_hooks(self) -> dict[str, Callable[..., str]]:
+    def _runtime_tool_hooks(self) -> dict[str, Callable[..., Any]]:
         if not self.enable_orchestration:
             return {}
         return {
@@ -415,8 +530,8 @@ class Agent:
             "subagents": self._tool_subagents,
         }
 
-    def _extra_tool_handlers(self) -> dict[str, Callable[..., str]]:
-        out: dict[str, Callable[..., str]] = {}
+    def _extra_tool_handlers(self) -> dict[str, Callable[..., Any]]:
+        out: dict[str, Callable[..., Any]] = {}
         for t in self.extra_tools:
             if not isinstance(t, dict):
                 continue
@@ -628,6 +743,7 @@ class Agent:
             if self.cancel_event is not None and self.cancel_event.is_set():
                 raise RuntimeError("cancelled")
             try:
+                resolved_api_key = self.get_api_key(self.provider_name) if self.get_api_key is not None else None
                 return self.provider.complete(
                     model=model,
                     messages=messages,
@@ -635,6 +751,7 @@ class Agent:
                     session_id=session_id,
                     thinking_level=thinking_level,
                     on_text_delta=on_text_delta,
+                    api_key=resolved_api_key,
                 )
             except Exception as exc:
                 transient = self._is_transient_error(exc)

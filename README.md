@@ -4,7 +4,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-[Contributing](CONTRIBUTING.md) · [Development](docs/DEVELOPMENT.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
+[Contributing](CONTRIBUTING.md) · [Development](docs/DEVELOPMENT.md) · [Agent Rules](docs/AGENTS.md) · [Code of Conduct](CODE_OF_CONDUCT.md) · [Security](SECURITY.md) · [Changelog](CHANGELOG.md)
 
 ---
 
@@ -263,12 +263,14 @@ python main.py --provider openai --model gpt-4o --session demo-1
 ### Extending the core
 
 * **Workspace**: Pass any `workspace_dir` (defaults to cwd) for prompt context and tool cwd.
-* **Custom tools**: Pass `extra_tools=[{"name": "...", "definition": {...}, "handler": fn}]` to `Agent(...)`. Each `definition` must be OpenAI-style. The handler receives keyword args and returns a string. Custom handlers may raise exceptions (recorded as tool errors) and can optionally accept `on_progress` to stream progress updates.
+* **Custom tools**: Pass `extra_tools=[{"name": "...", "definition": {...}, "handler": fn}]` to `Agent(...)`. Each `definition` must be OpenAI-style. The handler receives keyword args and can return either a string or `{"text": "...", "details": ...}`. Custom handlers may raise exceptions (recorded as tool errors) and can optionally accept `on_progress` to stream progress updates.
 * **Minimal footprint**: Use `enable_orchestration=False` to disable `sessions_spawn` and `subagents`; only base tools (read_file, write_file, list_directory, run_cmd, web_fetch) are exposed.
 * **Context**: Set `AGENT_CONTEXT_MODE=tokens` to cap history by estimated tokens (heuristic, no tiktoken).
 * **Runtime steering**: Call `agent.steer("...")` or `agent.follow_up("...")` from another thread while the run is active.
 * **Context transform**: Pass `transform_context=callable` to mutate session history before context compaction and request preparation.
 * **LLM conversion**: Pass `convert_to_llm=callable` to mutate/filter final messages sent to the provider.
+* **Before-turn hook**: Pass `before_turn=callable` to override the system prompt or prepend per-turn transient messages before each LLM call.
+* **Dynamic API key**: Pass `get_api_key=callable` to resolve a provider API key per request (useful for short-lived tokens).
 * **Pre-LLM transform (legacy)**: `transform_messages_for_llm=callable` remains supported for compatibility.
 
 ### Built-in tools

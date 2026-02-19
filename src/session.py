@@ -29,6 +29,11 @@ class SessionMeta:
     subagent_depth: int
     created_at: str
     updated_at: str
+    usage_input_tokens: int = 0
+    usage_output_tokens: int = 0
+    usage_total_tokens: int = 0
+    usage_cache_read_tokens: int = 0
+    usage_cache_write_tokens: int = 0
 
 
 class Session:
@@ -61,6 +66,22 @@ class Session:
 
     def add_system_event(self, content: str) -> None:
         self.messages.append({"role": "assistant", "content": f"[System Message] {content}"})
+        self.touch()
+
+    def accumulate_usage(
+        self,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        total_tokens: int = 0,
+        cache_read_tokens: int = 0,
+        cache_write_tokens: int = 0,
+    ) -> None:
+        self.meta.usage_input_tokens += max(0, int(input_tokens))
+        self.meta.usage_output_tokens += max(0, int(output_tokens))
+        self.meta.usage_total_tokens += max(0, int(total_tokens))
+        self.meta.usage_cache_read_tokens += max(0, int(cache_read_tokens))
+        self.meta.usage_cache_write_tokens += max(0, int(cache_write_tokens))
         self.touch()
 
     # -- utilities -------------------------------------------------------------

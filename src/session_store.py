@@ -64,6 +64,11 @@ class SessionStore:
                     subagent_depth=int(row.get("subagent_depth", subagent_depth)),
                     created_at=str(row.get("created_at", utc_now_iso())),
                     updated_at=str(row.get("updated_at", utc_now_iso())),
+                    usage_input_tokens=int(row.get("usage_input_tokens", 0) or 0),
+                    usage_output_tokens=int(row.get("usage_output_tokens", 0) or 0),
+                    usage_total_tokens=int(row.get("usage_total_tokens", 0) or 0),
+                    usage_cache_read_tokens=int(row.get("usage_cache_read_tokens", 0) or 0),
+                    usage_cache_write_tokens=int(row.get("usage_cache_write_tokens", 0) or 0),
                 )
             elif kind == "message":
                 message = row.get("message")
@@ -109,6 +114,11 @@ class SessionStore:
                     "subagent_depth": session.meta.subagent_depth,
                     "created_at": session.meta.created_at,
                     "updated_at": session.meta.updated_at,
+                    "usage_input_tokens": session.meta.usage_input_tokens,
+                    "usage_output_tokens": session.meta.usage_output_tokens,
+                    "usage_total_tokens": session.meta.usage_total_tokens,
+                    "usage_cache_read_tokens": session.meta.usage_cache_read_tokens,
+                    "usage_cache_write_tokens": session.meta.usage_cache_write_tokens,
                 },
                 ensure_ascii=False,
             )

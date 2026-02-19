@@ -58,6 +58,21 @@ On Unix you can use the [Makefile](Makefile): `make test`, `make cov`, `make lin
 - Ensure CI passes (tests and lint).
 - Update `CHANGELOG.md` under `[Unreleased]` for user-facing changes.
 
+## Changelog rules
+
+- Add new entries only under `## [Unreleased]`.
+- Use these sections when applicable: `### Breaking Changes`, `### Added`, `### Changed`, `### Fixed`, `### Removed`.
+- Do not modify already released sections (for example `## [0.1.0]`).
+- When referencing tracked work, use linked attribution:
+  - Internal changes: `Fixed ... ([#123](https://github.com/bmcool/AgentSpine/issues/123))`
+  - External contribution: `Added ... ([#456](https://github.com/bmcool/AgentSpine/pull/456) by [@user](https://github.com/user))`
+
+## Automation and AI-agent rules
+
+- Follow `docs/AGENTS.md` for tool usage and Git safety requirements.
+- Always read a file before editing it.
+- Stage only task-specific files; do not use sweeping add/reset/clean/stash commands.
+
 ## Questions
 
 Open a [Discussion](https://github.com/bmcool/AgentSpine/discussions) or an [Issue](https://github.com/bmcool/AgentSpine/issues).

@@ -17,6 +17,7 @@ class ProviderResponse:
     assistant_message: dict[str, Any]
     tool_calls: list[ToolCall]
     text: str
+    usage: dict[str, int] | None = None
 
 
 class Provider(ABC):
@@ -35,5 +36,6 @@ class Provider(ABC):
         session_id: str | None = None,
         thinking_level: str = "off",
         on_text_delta: Callable[[str], None] | None = None,
+        api_key: str | None = None,
     ) -> ProviderResponse:
         raise NotImplementedError
