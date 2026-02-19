@@ -48,7 +48,7 @@ class ExecuteToolTests(unittest.TestCase):
             "run_cmd",
             json.dumps(
                 {
-                    "command": f'"{sys.executable}" -c "import os; print(os.getenv(\'FOO\', \'\'))"',
+                    "command": f"\"{sys.executable}\" -c \"import os; print(os.getenv('FOO', ''))\"",
                     "cwd": str(self.workspace),
                     "env": {"FOO": "bar"},
                 }
