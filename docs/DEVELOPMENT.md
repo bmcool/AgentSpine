@@ -45,6 +45,7 @@ pre-commit run --all-files
 - `src/` — Core package: `agent.py` (reactive loop), `session*.py`, `context_*.py`, `tools.py`, `providers/`.
 - `tests/` — Unit tests; use fake provider, no real API calls.
 - `docs/` — Extra documentation (this file, etc.).
+- `docs/EVENTS.md` — Event contract for `on_event` consumers.
 
 ## Releasing
 

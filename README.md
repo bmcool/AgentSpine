@@ -308,7 +308,7 @@ AgentSpine/
 
 * **Streaming**: Default mode streams assistant text in real time; use `--no-stream` for non-stream output.
 * **Steer / follow_up**: `agent.steer(text)` injects an interrupt after the current tool; `agent.follow_up(text)` injects when the agent reaches a terminal turn. Use `clear_steering_queue()`, `clear_follow_up_queue()`, or `clear_all_queues()` as needed.
-* **Events**: Pass `on_event` to `Agent(...)` for lifecycle events: `agent_start`, `agent_end`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`. `chat_stream(..., on_text_delta=...)` is also supported.
+* **Events**: Pass `on_event` to `Agent(...)` for lifecycle events: `agent_start`, `agent_end`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`. `chat_stream(..., on_text_delta=...)` is also supported. Event types and payload shapes are documented in [docs/EVENTS.md](docs/EVENTS.md).
 
 ### Lanes and subagents
 
