@@ -131,9 +131,7 @@ class AgentPiAlignmentTests(unittest.TestCase):
         self.assertEqual(len(provider.calls), 2)
         self.assertTrue(any(msg.get("content") == "please pivot" for msg in agent.session.messages))
         tc2_results = [
-            msg
-            for msg in agent.session.messages
-            if msg.get("tool_call_id") == "tc2" and msg.get("role") == "tool"
+            msg for msg in agent.session.messages if msg.get("tool_call_id") == "tc2" and msg.get("role") == "tool"
         ]
         self.assertEqual(len(tc2_results), 1)
         self.assertIn("Skipped due to user interrupt.", tc2_results[0]["content"])
@@ -453,9 +451,7 @@ class AgentPiAlignmentTests(unittest.TestCase):
             result = agent.chat("start")
 
         self.assertEqual(result, "done")
-        skipped_end = [
-            e for e in events if e.get("type") == "tool_execution_end" and e.get("tool_call_id") == "tc2"
-        ]
+        skipped_end = [e for e in events if e.get("type") == "tool_execution_end" and e.get("tool_call_id") == "tc2"]
         self.assertEqual(len(skipped_end), 1)
         self.assertTrue(bool(skipped_end[0].get("skipped")))
 

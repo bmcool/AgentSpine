@@ -228,7 +228,9 @@ class Agent:
                 if isinstance(transformed_history, list):
                     history_messages = transformed_history
             if self.before_turn is not None:
-                hook_result = self.before_turn(self.session.meta.session_id, round_no, list(history_messages), system_prompt)
+                hook_result = self.before_turn(
+                    self.session.meta.session_id, round_no, list(history_messages), system_prompt
+                )
                 if isinstance(hook_result, tuple) and len(hook_result) == 2:
                     prompt_override, prepend_messages = hook_result
                     if isinstance(prompt_override, str) and prompt_override.strip():
