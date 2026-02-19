@@ -262,11 +262,13 @@ python main.py --provider openai --model gpt-4o --session demo-1
 ### Extending the core
 
 * **Workspace**: Pass any `workspace_dir` (defaults to cwd) for prompt context and tool cwd.
-* **Custom tools**: Pass `extra_tools=[{"name": "...", "definition": {...}, "handler": fn}]` to `Agent(...)`. Each `definition` must be OpenAI-style. The handler receives keyword args and returns a string.
+* **Custom tools**: Pass `extra_tools=[{"name": "...", "definition": {...}, "handler": fn}]` to `Agent(...)`. Each `definition` must be OpenAI-style. The handler receives keyword args and returns a string. Custom handlers may raise exceptions (recorded as tool errors) and can optionally accept `on_progress` to stream progress updates.
 * **Minimal footprint**: Use `enable_orchestration=False` to disable `sessions_spawn` and `subagents`; only base tools (read_file, write_file, list_directory, run_cmd, web_fetch) are exposed.
 * **Context**: Set `AGENT_CONTEXT_MODE=tokens` to cap history by estimated tokens (heuristic, no tiktoken).
 * **Runtime steering**: Call `agent.steer("...")` or `agent.follow_up("...")` from another thread while the run is active.
-* **Pre-LLM transform**: Pass `transform_messages_for_llm=callable` to mutate/filter outgoing messages before provider calls.
+* **Context transform**: Pass `transform_context=callable` to mutate session history before context compaction and request preparation.
+* **LLM conversion**: Pass `convert_to_llm=callable` to mutate/filter final messages sent to the provider.
+* **Pre-LLM transform (legacy)**: `transform_messages_for_llm=callable` remains supported for compatibility.
 
 ### Built-in tools
 
@@ -308,7 +310,8 @@ AgentSpine/
 
 * **Streaming**: Default mode streams assistant text in real time; use `--no-stream` for non-stream output.
 * **Steer / follow_up**: `agent.steer(text)` injects an interrupt after the current tool; `agent.follow_up(text)` injects when the agent reaches a terminal turn. Use `clear_steering_queue()`, `clear_follow_up_queue()`, or `clear_all_queues()` as needed.
-* **Events**: Pass `on_event` to `Agent(...)` for lifecycle events: `agent_start`, `agent_end`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_end`. `chat_stream(..., on_text_delta=...)` is also supported. Event types and payload shapes are documented in [docs/EVENTS.md](docs/EVENTS.md).
+* **Continue**: `agent.continue_run()` retries from existing context without appending a new user message. `agent.continue_run_stream(on_text_delta=...)` provides streaming retries.
+* **Events**: Pass `on_event` to `Agent(...)` for lifecycle events: `agent_start`, `agent_end`, `turn_start`, `turn_end`, `message_start`, `message_update`, `message_end`, `tool_execution_start`, `tool_execution_update`, `tool_execution_end`. `chat_stream(..., on_text_delta=...)` is also supported. Event types and payload shapes are documented in [docs/EVENTS.md](docs/EVENTS.md).
 
 ### Lanes and subagents
 

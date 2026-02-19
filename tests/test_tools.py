@@ -51,6 +51,34 @@ class ExecuteToolTests(unittest.TestCase):
         result = execute_tool("read_file", "not json")
         self.assertTrue(result.startswith("Error:"))
 
+    def test_extra_handler_accepts_on_progress(self) -> None:
+        updates: list[str] = []
+
+        def progress_handler(value: str, on_progress=None) -> str:
+            if on_progress is not None:
+                on_progress(f"update:{value}")
+            return "ok"
+
+        result = execute_tool(
+            "custom_progress",
+            json.dumps({"value": "v"}),
+            extra_handlers={"custom_progress": progress_handler},
+            on_progress=updates.append,
+        )
+        self.assertEqual(result, "ok")
+        self.assertEqual(updates, ["update:v"])
+
+    def test_extra_handler_exception_propagates(self) -> None:
+        def failing_handler() -> str:
+            raise RuntimeError("boom")
+
+        with self.assertRaises(RuntimeError):
+            execute_tool(
+                "failing_custom",
+                "{}",
+                extra_handlers={"failing_custom": failing_handler},
+            )
+
 
 class GetToolDefinitionsTests(unittest.TestCase):
     def test_base_tools_without_orchestration(self) -> None:

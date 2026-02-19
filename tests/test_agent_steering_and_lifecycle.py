@@ -80,7 +80,10 @@ class AgentPiAlignmentTests(unittest.TestCase):
         cancel_event: threading.Event | None = None,
         thinking_level: str | None = None,
         on_event: Any = None,
+        transform_context: Any = None,
+        convert_to_llm: Any = None,
         transform_messages_for_llm: Any = None,
+        extra_tools: Any = None,
     ) -> Agent:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -93,7 +96,10 @@ class AgentPiAlignmentTests(unittest.TestCase):
                 cancel_event=cancel_event,
                 thinking_level=thinking_level,
                 on_event=on_event,
+                transform_context=transform_context,
+                convert_to_llm=convert_to_llm,
                 transform_messages_for_llm=transform_messages_for_llm,
+                extra_tools=extra_tools,
             )
 
     def test_steer_interrupts_remaining_tool_calls(self) -> None:
@@ -121,7 +127,13 @@ class AgentPiAlignmentTests(unittest.TestCase):
         self.assertEqual(tool_invocations["count"], 1, "steer should skip remaining tool calls in turn")
         self.assertEqual(len(provider.calls), 2)
         self.assertTrue(any(msg.get("content") == "please pivot" for msg in agent.session.messages))
-        self.assertFalse(any(msg.get("tool_call_id") == "tc2" for msg in agent.session.messages))
+        tc2_results = [
+            msg
+            for msg in agent.session.messages
+            if msg.get("tool_call_id") == "tc2" and msg.get("role") == "tool"
+        ]
+        self.assertEqual(len(tc2_results), 1)
+        self.assertIn("Skipped due to user interrupt.", tc2_results[0]["content"])
 
     def test_follow_up_injects_after_terminal_turn(self) -> None:
         provider = FakeProvider([_assistant_text("first"), _assistant_text("second")])
@@ -178,6 +190,36 @@ class AgentPiAlignmentTests(unittest.TestCase):
         seen_marker = any(msg.get("content") == "transform-marker" for msg in provider.calls[0]["messages"])
         self.assertTrue(seen_marker)
 
+    def test_transform_context_then_convert_to_llm_pipeline(self) -> None:
+        provider = FakeProvider([_assistant_text("ok")])
+        calls: list[str] = []
+
+        def transform_context(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            calls.append("transform")
+            out = list(messages)
+            out.append({"role": "assistant", "content": "context-marker"})
+            return out
+
+        def convert_to_llm(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+            calls.append("convert")
+            out = list(messages)
+            out.append({"role": "assistant", "content": "convert-marker"})
+            return out
+
+        agent = self._new_agent(
+            provider,
+            transform_context=transform_context,
+            convert_to_llm=convert_to_llm,
+        )
+
+        result = agent.chat("hello")
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(calls, ["transform", "convert"])
+        sent_messages = provider.calls[0]["messages"]
+        self.assertTrue(any(msg.get("content") == "context-marker" for msg in sent_messages))
+        self.assertTrue(any(msg.get("content") == "convert-marker" for msg in sent_messages))
+
     def test_on_event_emits_lifecycle_and_stream_updates(self) -> None:
         provider = FakeProvider([_assistant_text("streamed-text")])
         events: list[dict[str, Any]] = []
@@ -194,6 +236,105 @@ class AgentPiAlignmentTests(unittest.TestCase):
         self.assertIn("message_end", event_types)
         self.assertIn("turn_end", event_types)
         self.assertIn("agent_end", event_types)
+
+    def test_tool_progress_emits_tool_execution_update(self) -> None:
+        provider = FakeProvider(
+            [
+                _assistant_with_tools(("tc1", "progress_tool", '{"value":"x"}')),
+                _assistant_text("done"),
+            ]
+        )
+        events: list[dict[str, Any]] = []
+
+        def progress_tool(value: str, on_progress: Any = None) -> str:
+            if on_progress is not None:
+                on_progress(f"start:{value}")
+                on_progress("finish")
+            return "ok"
+
+        extra_tools = [
+            {
+                "name": "progress_tool",
+                "definition": {
+                    "type": "function",
+                    "function": {
+                        "name": "progress_tool",
+                        "description": "Progress-aware test tool",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"value": {"type": "string"}},
+                            "required": ["value"],
+                        },
+                    },
+                },
+                "handler": progress_tool,
+            }
+        ]
+        agent = self._new_agent(provider, on_event=events.append, extra_tools=extra_tools)
+
+        result = agent.chat("run progress tool")
+
+        self.assertEqual(result, "done")
+        progress_events = [e for e in events if e.get("type") == "tool_execution_update"]
+        self.assertEqual(len(progress_events), 2)
+        self.assertEqual(progress_events[0].get("partial"), "start:x")
+        self.assertEqual(progress_events[1].get("partial"), "finish")
+
+    def test_extra_tool_exception_becomes_tool_error_result(self) -> None:
+        provider = FakeProvider(
+            [
+                _assistant_with_tools(("tc1", "failing_tool", "{}")),
+                _assistant_text("handled"),
+            ]
+        )
+
+        def failing_tool() -> str:
+            raise RuntimeError("boom")
+
+        extra_tools = [
+            {
+                "name": "failing_tool",
+                "definition": {
+                    "type": "function",
+                    "function": {
+                        "name": "failing_tool",
+                        "description": "Always fails",
+                        "parameters": {"type": "object", "properties": {}, "required": []},
+                    },
+                },
+                "handler": failing_tool,
+            }
+        ]
+        agent = self._new_agent(provider, extra_tools=extra_tools)
+
+        result = agent.chat("run failing tool")
+
+        self.assertEqual(result, "handled")
+        tool_results = [m for m in agent.session.messages if m.get("role") == "tool" and m.get("tool_call_id") == "tc1"]
+        self.assertEqual(len(tool_results), 1)
+        self.assertIn("[Tool Error] failing_tool: boom", tool_results[0]["content"])
+
+    def test_continue_run_retries_without_new_user_message(self) -> None:
+        provider = FakeProvider([_assistant_text("first"), _assistant_text("second")])
+        agent = self._new_agent(provider)
+
+        first = agent.chat("hello")
+        agent.session.add_user_message("retry without appending via chat")
+        second = agent.continue_run()
+
+        self.assertEqual(first, "first")
+        self.assertEqual(second, "second")
+        self.assertEqual(len(provider.calls), 2)
+        user_messages = [m for m in agent.session.messages if m.get("role") == "user"]
+        self.assertEqual(len(user_messages), 2)
+
+    def test_continue_run_requires_last_message_user_or_tool(self) -> None:
+        provider = FakeProvider([_assistant_text("first")])
+        agent = self._new_agent(provider)
+        agent.chat("hello")
+
+        with self.assertRaises(ValueError):
+            agent.continue_run()
 
     def test_chat_with_one_tool_then_text_uses_real_execute_tool(self) -> None:
         """Full reactive loop: one tool call (read_file) then final text, no mock."""

@@ -38,6 +38,11 @@ def _default_model(provider: str) -> str:
 ExtraTool = dict[str, Any]
 EventHandler = Callable[[dict[str, Any]], None]
 MessageTransformer = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
+ContextTransformer = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
+MessageConverter = Callable[[list[dict[str, Any]]], list[dict[str, Any]]]
+
+SKIPPED_DUE_TO_STEER = "Skipped due to user interrupt."
+TOOL_ERROR_PREFIX = "[Tool Error]"
 
 
 def _default_thinking_level() -> str:
@@ -60,6 +65,8 @@ class Agent:
         cancel_event: threading.Event | None = None,
         thinking_level: str | None = None,
         on_event: EventHandler | None = None,
+        transform_context: ContextTransformer | None = None,
+        convert_to_llm: MessageConverter | None = None,
         transform_messages_for_llm: MessageTransformer | None = None,
     ) -> None:
         self.provider_name = (provider or os.getenv("AGENT_PROVIDER") or "openai").strip().lower()
@@ -78,6 +85,8 @@ class Agent:
         self.cancel_event = cancel_event
         self.thinking_level = (thinking_level or _default_thinking_level()).strip().lower() or "off"
         self.on_event = on_event
+        self.transform_context = transform_context
+        self.convert_to_llm = convert_to_llm
         self.transform_messages_for_llm = transform_messages_for_llm
         self._queue_lock = threading.Lock()
         self._steering_queue: list[str] = []
@@ -112,6 +121,22 @@ class Agent:
             on_metrics=self._on_lane_metrics,
         )
 
+    def continue_run(self) -> str:
+        lane_id = self.session.meta.session_id
+        return _GLOBAL_LANE_QUEUE.run(
+            lane_id,
+            self._continue_impl,
+            on_metrics=self._on_lane_metrics,
+        )
+
+    def continue_run_stream(self, on_text_delta: Callable[[str], None]) -> str:
+        lane_id = self.session.meta.session_id
+        return _GLOBAL_LANE_QUEUE.run(
+            lane_id,
+            lambda: self._continue_impl(on_text_delta=on_text_delta),
+            on_metrics=self._on_lane_metrics,
+        )
+
     def _chat_impl(self, user_input: str) -> str:
         self.session.add_user_message(user_input)
         self.store.save(self.session)
@@ -120,6 +145,14 @@ class Agent:
     def _chat_stream_impl(self, user_input: str, on_text_delta: Callable[[str], None]) -> str:
         self.session.add_user_message(user_input)
         self.store.save(self.session)
+        return self._run_loop(on_text_delta=on_text_delta)
+
+    def _continue_impl(self, on_text_delta: Callable[[str], None] | None = None) -> str:
+        if not self.session.messages:
+            raise ValueError("Cannot continue: no messages in context")
+        last_role = str(self.session.messages[-1].get("role", ""))
+        if last_role not in {"user", "tool"}:
+            raise ValueError("Cannot continue: last message must be user or tool")
         return self._run_loop(on_text_delta=on_text_delta)
 
     def reset(self) -> None:
@@ -172,14 +205,23 @@ class Agent:
                     extra_tools=self.extra_tools,
                 ),
             )
+            history_messages = self.session.messages
+            if self.transform_context is not None:
+                transformed_history = self.transform_context(list(self.session.messages))
+                if isinstance(transformed_history, list):
+                    history_messages = transformed_history
             llm_messages, compacted = self.context_manager.prepare_messages(
                 system_prompt=system_prompt,
-                history_messages=self.session.messages,
+                history_messages=history_messages,
             )
-            if compacted:
+            if compacted and history_messages is self.session.messages:
                 # Keep session history aligned with compacted context (exclude system).
                 self.session.messages = llm_messages[1:]
                 self.store.save(self.session)
+            if self.convert_to_llm is not None:
+                converted = self.convert_to_llm(llm_messages)
+                if isinstance(converted, list):
+                    llm_messages = converted
             if self.transform_messages_for_llm is not None:
                 transformed = self.transform_messages_for_llm(llm_messages)
                 if isinstance(transformed, list):
@@ -237,7 +279,7 @@ class Agent:
                 return self._finish_run("(agent stopped: repeated tool-call loop detected)")
 
             steering_triggered = False
-            for call in response.tool_calls:
+            for idx, call in enumerate(response.tool_calls):
                 if self.cancel_event is not None and self.cancel_event.is_set():
                     self._emit_event({"type": "turn_end", "round": round_no, "status": "cancelled"})
                     return self._finish_run("(agent stopped: cancelled)")
@@ -251,12 +293,24 @@ class Agent:
                         "args": call.arguments_json,
                     }
                 )
-                result = execute_tool(
-                    call.name,
-                    call.arguments_json,
-                    runtime_hooks=self._runtime_tool_hooks(),
-                    extra_handlers=self._extra_tool_handlers(),
-                )
+                try:
+                    result = execute_tool(
+                        call.name,
+                        call.arguments_json,
+                        runtime_hooks=self._runtime_tool_hooks(),
+                        extra_handlers=self._extra_tool_handlers(),
+                        on_progress=lambda text: self._emit_event(
+                            {
+                                "type": "tool_execution_update",
+                                "round": round_no,
+                                "tool_call_id": call.id,
+                                "tool_name": call.name,
+                                "partial": text,
+                            }
+                        ),
+                    )
+                except Exception as exc:
+                    result = f"{TOOL_ERROR_PREFIX} {call.name}: {exc}"
                 truncated_result = self._truncate_tool_result(result)
                 self.session.add_tool_result(
                     tool_call_id=call.id,
@@ -273,6 +327,11 @@ class Agent:
                 )
                 queued_steer = self._pop_steering_message()
                 if queued_steer is not None:
+                    for skipped_call in response.tool_calls[idx + 1 :]:
+                        self.session.add_tool_result(
+                            tool_call_id=skipped_call.id,
+                            content=SKIPPED_DUE_TO_STEER,
+                        )
                     self._append_queued_user_message(queued_steer, source="steer", round_no=round_no)
                     steering_triggered = True
                     break

@@ -9,6 +9,7 @@ Each tool has:
 from __future__ import annotations
 
 import json
+import inspect
 import os
 import re
 import subprocess
@@ -319,6 +320,7 @@ def execute_tool(
     arguments_json: str,
     runtime_hooks: dict[str, Callable[..., str]] | None = None,
     extra_handlers: dict[str, Callable[..., str]] | None = None,
+    on_progress: Callable[[str], None] | None = None,
 ) -> str:
     """
     Look up a tool by name, parse its JSON arguments, and run it.
@@ -326,16 +328,29 @@ def execute_tool(
     extra_handlers: optional map of name -> handler for embedding-project tools.
     """
     fn = _TOOL_IMPLS.get(name)
+    source = "builtin"
     if fn is None and runtime_hooks:
         fn = runtime_hooks.get(name)
+        source = "runtime" if fn is not None else source
     if fn is None and extra_handlers:
         fn = extra_handlers.get(name)
+        source = "extra" if fn is not None else source
     if fn is None:
         return f"Error: unknown tool '{name}'"
     try:
         args: dict[str, Any] = json.loads(arguments_json) if arguments_json else {}
     except json.JSONDecodeError as exc:
         return f"Error: failed to parse tool arguments: {exc}"
+    if source == "extra":
+        call_args = dict(args)
+        if on_progress is not None:
+            try:
+                signature = inspect.signature(fn)
+                if "on_progress" in signature.parameters:
+                    call_args["on_progress"] = on_progress
+            except (TypeError, ValueError):
+                pass
+        return fn(**call_args)
     try:
         return fn(**args)
     except TypeError as exc:

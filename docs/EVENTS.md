@@ -12,7 +12,7 @@ Events are emitted by the core during `chat()` / `chat_stream()` when `on_event`
    - `message_start` (user or assistant)
    - [If assistant and streaming] zero or more `message_update`
    - `message_end`
-   - [If tool calls] for each tool: `tool_execution_start` → `tool_execution_end` (then possibly `message_start` / `message_end` for injected user message if steer)
+   - [If tool calls] for each tool: `tool_execution_start` → zero or more `tool_execution_update` → `tool_execution_end` (then possibly `message_start` / `message_end` for injected user message if steer)
    - `turn_end`
 3. `agent_end`
 
@@ -26,6 +26,7 @@ Events are emitted by the core during `chat()` / `chat_stream()` when `on_event`
 | `message_update` | Assistant stream chunk (streaming only) | `role: "assistant"`, `delta: str` |
 | `message_end` | Message complete | `role: "user" \| "assistant"`, `round: int`, `text_preview?: str`, `source?: str` |
 | `tool_execution_start` | Tool is about to run | `round: int`, `tool_call_id: str`, `tool_name: str`, `args: str` (JSON string) |
+| `tool_execution_update` | Tool streams progress (optional) | `round: int`, `tool_call_id: str`, `tool_name: str`, `partial: str` |
 | `tool_execution_end` | Tool finished | `round: int`, `tool_call_id: str`, `tool_name: str`, `result_preview: str` |
 | `turn_end` | Turn finished | `round: int`, `status: str` (e.g. `"completed"`, `"tool_calls_processed"`, `"steered"`, `"follow_up_injected"`, `"cancelled"`, `"loop_detected"`), `tool_calls?: int` |
 | `agent_end` | Run finished | `final_text: str` |
