@@ -1,0 +1,73 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentspine"
+version = "0.1.0"
+description = "A composable backbone for building extensible, session-based AI agents."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "AgentSpine Contributors" }
+]
+keywords = ["agent", "llm", "openai", "anthropic", "session", "reactive"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "openai>=1.0.0",
+    "anthropic>=0.34.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1.0",
+    "pre-commit>=3.0",
+]
+
+[project.urls]
+Repository = "https://github.com/bmcool/AgentSpine"
+Documentation = "https://github.com/bmcool/AgentSpine#readme"
+"Bug Tracker" = "https://github.com/bmcool/AgentSpine/issues"
+
+[project.scripts]
+agentspine = "main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+src = ["src", "main.py", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-v"
+
+[tool.coverage.run]
+source = ["src", "main"]
+omit = ["tests/*"]
+
+[tool.coverage.report]
+exclude_lines = ["pragma: no cover", "def __repr__", "if TYPE_CHECKING:"]
+show_missing = true
